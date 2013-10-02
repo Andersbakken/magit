@@ -3970,16 +3970,16 @@ Evaluate (man \"git-check-ref-format\") for details")
             graph
             (when refs
               (concat
-	       (mapconcat 'identity
-			  (cl-mapcan
-			   (lambda (r)
-			     (cl-destructuring-bind (label face)
-				 (magit-ref-get-label-color r)
-			       (when label
-				 (list (propertize label 'face face)))))
-			   refs)
-			  " ")
-	       " "))
+               (mapconcat 'identity
+                          (cl-mapcan
+                           (lambda (r)
+                             (cl-destructuring-bind (label face)
+                                 (magit-ref-get-label-color r)
+                               (when label
+                                 (list (propertize label 'face face)))))
+                           refs)
+                          " ")
+               " "))
             (when refsub
               (magit-log-format-reflog refsub))
             (when msg
@@ -5492,22 +5492,25 @@ even if `magit-set-upstream-on-push's value is `refuse'."
 ;;;; Committing
 
 ;;;###autoload
-(defun magit-commit (&optional amendp)
+(defun magit-commit (&optional prefix)
   "Create a new commit on HEAD.
 With a prefix argument amend to the commit at HEAD instead.
 \('git commit [--amend]')."
   (interactive "P")
   (let ((args magit-custom-options))
-    (when amendp
-      (setq args (cons "--amend" args)))
-    (if (and magit-commit-all-when-nothing-staged
-             (not (magit-anything-staged-p))
-             (cond ((eq magit-commit-all-when-nothing-staged 'ask-stage)
-                    (and (y-or-n-p "Nothing staged.  Stage everything now? ") (magit-stage-all) nil))
-                   ((eq magit-commit-all-when-nothing-staged 'ask)
-                    (y-or-n-p "Nothing staged.  Commit all unstaged changes? "))
-                   (t magit-commit-all-when-nothing-staged)))
-        (setq args (cons "--all" args)))
+    (cond ((integerp prefix)
+           (setq args (cons "--all" args)))
+          (prefix
+           (setq args (cons "--amend" args)))
+          ((and magit-commit-all-when-nothing-staged (not (magit-anything-staged-p)))
+           (cond ((eq magit-commit-all-when-nothing-staged 'ask-stage)
+                  (if (y-or-n-p "Nothing staged.  Stage everything now? ")
+                      (magit-stage-all)))
+                 ((eq magit-commit-all-when-nothing-staged 'ask)
+                  (if (y-or-n-p "Nothing staged.  Commit all unstaged changes? ")
+                      (setq args (cons "--all" args))))
+                 (t (setq args (cons "--all" args)))))
+          (t nil))
     (if (not (or (magit-anything-staged-p)
                  (member "--allow-empty" args)
                  (member "--all" args)
@@ -6398,7 +6401,7 @@ This differs from `add-change-log-entry' (which see) in that
 it acts on the current hunk in a Magit buffer instead of on
 a position in a file-visiting buffer."
   (interactive (list current-prefix-arg
-		     (prompt-for-change-log-name)))
+                     (prompt-for-change-log-name)))
   (let (buf pos)
     (save-window-excursion
       (magit-visit-file-item)

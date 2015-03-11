@@ -671,6 +671,12 @@ deep."
   :group 'magit
   :type 'integer)
 
+(defcustom magit-maximum-stashes nil
+  "Maximum number of stashes to display in magit-status buffer"
+  :package-version '(magit . "2.0.0")
+  :group 'magit
+  :type 'integer)
+
 ;;;;; Modes
 ;;;;;; Common
 
@@ -4395,9 +4401,14 @@ can be used to override this."
 ;;;; Real Sections
 
 (defun magit-insert-stashes ()
-   ;; #1427 Set log.date to work around an issue in Git <1.7.10.3.
-  (let ((stashes (magit-git-lines "-c" "log.date=default" "stash" "list")))
+  ;; #1427 Set log.date to work around an issue in Git <1.7.10.3.
+  (let* ((stashes (magit-git-lines "-c" "log.date=default" "stash" "list"))
+         (too/many (and magit-maximum-stashes
+                        (> (length stashes) magit-maximum-stashes)
+                        (- (length stashes) magit-maximum-stashes))))
     (when stashes
+      (when too/many
+        (nbutlast stashes too/many))
       (magit-with-section (section stashes 'stashes "Stashes:" t)
         (dolist (stash stashes)
           (string-match "^\\(stash@{\\([0-9]+\\)}\\): \\(.+\\)$" stash)
@@ -4406,6 +4417,8 @@ can be used to override this."
                 (message (match-string 3 stash)))
             (magit-with-section (section stash stash)
               (insert number ": " message "\n"))))
+        (when too/many
+          (insert (number-to-string too/many) " more stashes"))
         (insert "\n")))))
 
 (defun magit-insert-untracked-files ()

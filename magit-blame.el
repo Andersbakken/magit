@@ -86,6 +86,10 @@
     (define-key map (kbd "q") 'magit-blame-mode)
     (define-key map (kbd "n") 'magit-blame-next-chunk)
     (define-key map (kbd "p") 'magit-blame-previous-chunk)
+    (define-key map (kbd "r") 'magit-reblame-for-current)
+    (define-key map (kbd "P") 'magit-reblame-for-previous~)
+    (define-key map (kbd "~") 'magit-reblame-for-previous~)
+    (define-key map (kbd "^") 'magit-reblame-for-previous^)
     map)
   "Keymap for an annotated section.\\{magit-blame-map}")
 
@@ -95,6 +99,9 @@
     ["Locate Commit" magit-blame-locate-commit t]
     ["Next" magit-blame-next-chunk t]
     ["Previous" magit-blame-previous-chunk t]
+    ["Reblame" magit-reblame-for-current t]
+    ["Reblame for parent ~" magit-reblame-for-previous~ t]
+    ["Reblame for parent ^" magit-reblame-for-previous^ t]
     "---"
     ["Quit" magit-blame-mode t]))
 
@@ -107,21 +114,23 @@
   "Display blame information inline."
   :keymap magit-blame-map
   :lighter " blame"
-  (unless (buffer-file-name)
-    (user-error "Current buffer has no associated file!"))
-  (when (and (buffer-modified-p)
-             (y-or-n-p (format "save %s first? " (buffer-file-name))))
-    (save-buffer))
-
-  (cond (magit-blame-mode
+  (cond ((and magit-blame-mode (not (string-prefix-p "*magit-blame" (buffer-name))))
+         (unless (buffer-file-name)
+           (user-error "Current buffer has no associated file!"))
+         (when (and (buffer-modified-p)
+                    (y-or-n-p (format "save %s first? " (buffer-file-name))))
+           (save-buffer))
          (setq magit-blame-buffer-read-only buffer-read-only)
+         ;; (setq buffer-read-only nil)
          (magit-blame-file-on (current-buffer))
          (set-buffer-modified-p nil)
          (setq buffer-read-only t))
         (t
-         (magit-blame-file-off (current-buffer))
-         (set-buffer-modified-p nil)
-         (setq buffer-read-only magit-blame-buffer-read-only))))
+         (if (not (buffer-file-name))
+             (kill-buffer (current-buffer))
+           (magit-blame-file-off (current-buffer))
+           (set-buffer-modified-p nil)
+           (setq buffer-read-only magit-blame-buffer-read-only)))))
 
 (defun magit-blame-file-off (buffer)
   (save-excursion
@@ -133,27 +142,92 @@
                   (delete-overlay ov)))
               (overlays-in (point-min) (point-max)))))))
 
-(defun magit-blame-file-on (buffer)
+(defun magit-blame-file-on (buffer &optional sha1 filename)
   (magit-blame-file-off buffer)
   (save-excursion
     (with-current-buffer buffer
       (save-restriction
         (with-temp-buffer
-          (apply 'magit-git-insert "blame" "--porcelain"
+          ;; (message "calling: git blame --porcelain %s -- %s" (or sha1 "HEAD") (file-name-nondirectory (or filename (buffer-file-name buffer))))
+          (apply 'magit-git-insert "blame" "--porcelain" (or sha1 "HEAD")
                  `(,@(and magit-blame-ignore-whitespace (list "-w")) "--"
-                   ,(file-name-nondirectory (buffer-file-name buffer))))
+                   ,(file-name-nondirectory (or filename (buffer-file-name buffer)))))
           (magit-blame-parse buffer (current-buffer)))))))
 
+(defun magit-sha1-for-pos (pos)
+  (let (sha1)
+    (dolist (ov (overlays-at pos))
+      (when (overlay-get ov :blame)
+        (setq sha1 (plist-get (nth 3 (overlay-get ov :blame)) :sha1))))
+    sha1))
+
+(defun magit-file-for-pos (pos)
+  (let (file)
+    (dolist (ov (overlays-at pos))
+      (when (overlay-get ov :blame)
+        (setq file (plist-get (nth 3 (overlay-get ov :blame)) :file))))
+    file))
+
+(defun magit-reblame-for-sha1 (sha1 file)
+  (let ((line (count-lines 1 (point)))
+        (buffer (get-buffer-create (format "*magit-blame %s - %s*" file sha1))))
+    (switch-to-buffer buffer)
+    (cd (magit-get-top-dir))
+    (setq buffer-read-only nil)
+    (erase-buffer)
+    ;; (message "calling: git show %s" (concat (or sha1 "HEAD") ":" (file-name-nondirectory file)))
+    (magit-git-insert "show" (concat (or sha1 "HEAD") ":" (file-name-nondirectory file)))
+    (setq buffer-file-name file)
+    (set-auto-mode)
+    (setq buffer-file-name nil)
+    (goto-char (point-min))
+    (when (<= line (count-lines (point-min) (point-max)))
+      (forward-line line))
+    (font-lock-fontify-buffer)
+    (magit-blame-file-on (current-buffer) sha1 file)
+    (setq buffer-read-only t)
+    (set-buffer-modified-p nil)
+    (use-local-map magit-blame-map)))
+
+(defun magit-blame-find-sha1 (pos suffix)
+  (let ((sha1 (magit-sha1-for-pos pos)))
+    (when sha1
+      (with-temp-buffer
+        (magit-git-insert "rev-parse" (concat sha1 suffix))
+        (goto-char (point-min))
+        (and (not (looking-at (concat sha1 suffix)))
+             (buffer-substring-no-properties (point-min) (1- (point-max))))))))
+
 ;;; Commands
+
+(defun magit-reblame-for-previous~ (pos)
+  "Reblame for parent commit ~."
+  (interactive "d")
+  (let ((sha1 (magit-blame-find-sha1 pos "~"))
+        (filename (magit-file-for-pos pos)))
+    (when (and sha1 filename)
+      (magit-reblame-for-sha1 sha1 filename))))
+
+(defun magit-reblame-for-previous^ (pos)
+  "Reblame for parent commit ^."
+  (interactive "d")
+  (let ((sha1 (magit-blame-find-sha1 pos "^"))
+        (filename (magit-file-for-pos pos)))
+    (when (and sha1 filename)
+      (magit-reblame-for-sha1 sha1 filename))))
+
+(defun magit-reblame-for-current (pos)
+  "Reblame for current commit."
+  (interactive "d")
+  (let ((sha1 (magit-sha1-for-pos pos))
+        (filename (magit-file-for-pos pos)))
+    (when (and sha1 filename)
+      (magit-reblame-for-sha1 sha1 filename))))
 
 (defun magit-blame-locate-commit (pos)
   "Jump to a commit in the branch history from an annotated blame section."
   (interactive "d")
-  (let ((overlays (overlays-at pos))
-        sha1)
-    (dolist (ov overlays)
-      (when (overlay-get ov :blame)
-        (setq sha1 (plist-get (nth 3 (overlay-get ov :blame)) :sha1))))
+  (let ((sha1 (magit-sha1-for-pos pos)))
     (when sha1
       (magit-show-commit sha1))))
 
